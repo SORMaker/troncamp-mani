@@ -1,0 +1,16 @@
+{
+    "contact_points": [
+        {
+            "id": [],
+            "description": "The center of bottle",
+            "usage": "Used for grabbing the bottle."
+        }
+    ],
+    "functional_points": [
+        {
+            "id": 0,
+            "description": "The center of bottle",
+            "usage": "Used to place the bottle2 on the target location."
+        }
+    ]
+}

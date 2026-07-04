@@ -1,0 +1,15 @@
+{
+    "contact_points": [
+        {
+            "id": 0,
+            "description": "On the left side of the roller handle.",
+            "usage": "Used left gripper to hold the roller handle."
+        },
+        {
+            "id": 1,
+            "description": "On the right side of the roller handle.",
+            "usage": "Used right gripper to hold the roller handle."
+        }
+    ],
+    "functional_points": []
+}

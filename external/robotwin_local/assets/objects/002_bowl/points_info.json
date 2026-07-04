@@ -1,0 +1,16 @@
+{
+    "contact_points": [
+        {
+            "id": [0, 1, 2, 3],
+            "description": "On the edge of the bowl",
+            "usage": "Used for grasping the bowl."
+        }
+    ],
+    "functional_points": [
+        {
+            "id": 0,
+            "description": "On the bottom of the bowl",
+            "usage": "Used to place the bowl on a surface."
+        }
+    ]
+}
