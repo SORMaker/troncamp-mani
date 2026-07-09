@@ -1,4 +1,5 @@
 import os
+from sched import scheduler
 
 # Set rendering backend for MuJoCo
 os.environ["MUJOCO_GL"] = "egl"
@@ -395,9 +396,14 @@ def train_bc(train_dataloader, val_dataloader, config):
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
+
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
-
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=num_epochs,
+        eta_min=1e-6,
+    )
     # Multi-GPU via DDP under torchrun: each rank owns one GPU, the train sampler shards the data
     # (set in load_data) and gradients are all-reduced -> real ~Nx throughput. Optimizer is built on
     # the raw policy above (DDP only wraps the forward; params are shared), so it stays valid.
@@ -455,6 +461,8 @@ def train_bc(train_dataloader, val_dataloader, config):
         epoch_summary = compute_dict_mean(train_history[(batch_idx + 1) * epoch:(batch_idx + 1) * (epoch + 1)])
         epoch_train_loss = epoch_summary["loss"]
         print(f"Train loss: {epoch_train_loss:.5f}")
+        scheduler.step()
+        print(f"LR: {scheduler.get_last_lr()[0]:.8f}")
         summary_string = ""
         for k, v in epoch_summary.items():
             summary_string += f"{k}: {v.item():.3f} "
