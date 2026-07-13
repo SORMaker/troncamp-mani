@@ -11,7 +11,7 @@ action_dim: 16
 kl_weight: 10.0
 chunk_size: 50 
 hidden_dim: 512
-dim_feedforward: 3200
+dim_feedforward: 6144
 temporal_agg: false 
 device: cuda:0
 

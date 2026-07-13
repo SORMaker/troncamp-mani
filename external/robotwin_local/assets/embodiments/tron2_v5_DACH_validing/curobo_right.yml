@@ -3,7 +3,7 @@
 
 robot_cfg:
   kinematics:
-    urdf_path: /root/troncamp-mani/embodiments/tron2_v5_DACH_validing/robot.urdf
+    urdf_path: /home/xzy/projects/troncamp-mani/embodiments/tron2_v5_DACH_validing/robot.urdf
 
     base_link: "base_Link"
     tool_frames: ["tcp_R_Link"]
@@ -21,7 +21,7 @@ robot_cfg:
         "grasper_R_jaw_left_Link",
         "grasper_R_jaw_right_Link"
       ]
-    collision_spheres: /root/troncamp-mani/embodiments/tron2_v5_DACH_validing/collision_tron2_right.yml
+    collision_spheres: /home/xzy/projects/troncamp-mani/embodiments/tron2_v5_DACH_validing/collision_tron2_right.yml
     collision_sphere_buffer: 0.004
     extra_collision_spheres: {}
     use_global_cumul: True

@@ -399,11 +399,13 @@ def train_bc(train_dataloader, val_dataloader, config):
 
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
+
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
         T_max=num_epochs,
         eta_min=1e-6,
-    )
+)
+
     # Multi-GPU via DDP under torchrun: each rank owns one GPU, the train sampler shards the data
     # (set in load_data) and gradients are all-reduced -> real ~Nx throughput. Optimizer is built on
     # the raw policy above (DDP only wraps the forward; params are shared), so it stays valid.

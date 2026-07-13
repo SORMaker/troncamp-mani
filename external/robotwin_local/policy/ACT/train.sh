@@ -17,8 +17,8 @@ python3 imitate_episodes.py \
     --kl_weight 10 \
     --chunk_size 50 \
     --hidden_dim 512 \
-    --batch_size 4 \
-    --dim_feedforward 4096 \
+    --batch_size 32 \
+    --dim_feedforward 6144 \
     --num_epochs 8000 \
     --lr 1e-5 \
     --save_freq 1000 \
