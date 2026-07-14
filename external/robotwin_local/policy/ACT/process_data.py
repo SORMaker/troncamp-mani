@@ -60,54 +60,108 @@ def data_transform(path, episode_num, save_path):
     for i in range(episode_num):
         left_gripper_all, left_arm_all, right_gripper_all, right_arm_all, image_dict = (load_hdf5(
             os.path.join(path, f"episode{i}.hdf5")))
-        qpos = []
-        actions = []
+        num_frames = left_gripper_all.shape[0]
+        if num_frames < 2:
+            raise ValueError(
+                f"episode {i} has only {num_frames} frame(s); at least 2 frames are required"
+            )
+
+        states = []
         cam_high = []
         cam_right_wrist = []
         cam_left_wrist = []
-        left_arm_dim = []
-        right_arm_dim = []
 
-        last_state = None
-        for j in range(0, left_gripper_all.shape[0]):
+        for j in range(num_frames):
+            state = np.concatenate(
+                (
+                    left_arm_all[j],
+                    [left_gripper_all[j]],
+                    right_arm_all[j],
+                    [right_gripper_all[j]],
+                ),
+                axis=0,
+            ).astype(np.float32)
 
-            left_gripper, left_arm, right_gripper, right_arm = (
-                left_gripper_all[j],
-                left_arm_all[j],
-                right_gripper_all[j],
-                right_arm_all[j],
-            )
+            if state.shape != (16,):
+                raise ValueError(
+                    f"episode {i}, frame {j}: expected state shape (16,), got {state.shape}"
+                )
 
-            if j != left_gripper_all.shape[0] - 1:
-                state = np.concatenate((left_arm, [left_gripper], right_arm, [right_gripper]), axis=0)  # joint
+            states.append(state)
 
-                state = state.astype(np.float32)
-                qpos.append(state)
-
+            if j < num_frames - 1:
                 camera_high_bits = image_dict["head_camera"][j]
-                camera_high = cv2.imdecode(np.frombuffer(camera_high_bits, np.uint8), cv2.IMREAD_COLOR)
-                camera_high_resized = cv2.resize(camera_high, (640, 480))
-                cam_high.append(camera_high_resized)
+                camera_high = cv2.imdecode(
+                    np.frombuffer(camera_high_bits, np.uint8),
+                    cv2.IMREAD_COLOR,
+                )
+                if camera_high is None:
+                    raise ValueError(f"episode {i}, frame {j}: failed to decode head_camera")
+                cam_high.append(cv2.resize(camera_high, (640, 480)))
 
                 camera_right_wrist_bits = image_dict["right_camera"][j]
-                camera_right_wrist = cv2.imdecode(np.frombuffer(camera_right_wrist_bits, np.uint8), cv2.IMREAD_COLOR)
-                camera_right_wrist_resized = cv2.resize(camera_right_wrist, (640, 480))
-                cam_right_wrist.append(camera_right_wrist_resized)
+                camera_right_wrist = cv2.imdecode(
+                    np.frombuffer(camera_right_wrist_bits, np.uint8),
+                    cv2.IMREAD_COLOR,
+                )
+                if camera_right_wrist is None:
+                    raise ValueError(f"episode {i}, frame {j}: failed to decode right_camera")
+                cam_right_wrist.append(cv2.resize(camera_right_wrist, (640, 480)))
 
                 camera_left_wrist_bits = image_dict["left_camera"][j]
-                camera_left_wrist = cv2.imdecode(np.frombuffer(camera_left_wrist_bits, np.uint8), cv2.IMREAD_COLOR)
-                camera_left_wrist_resized = cv2.resize(camera_left_wrist, (640, 480))
-                cam_left_wrist.append(camera_left_wrist_resized)
+                camera_left_wrist = cv2.imdecode(
+                    np.frombuffer(camera_left_wrist_bits, np.uint8),
+                    cv2.IMREAD_COLOR,
+                )
+                if camera_left_wrist is None:
+                    raise ValueError(f"episode {i}, frame {j}: failed to decode left_camera")
+                cam_left_wrist.append(cv2.resize(camera_left_wrist, (640, 480)))
 
-            if j != 0:
-                action = state
-                actions.append(action)
-                left_arm_dim.append(left_arm.shape[0])
-                right_arm_dim.append(right_arm.shape[0])
+        states = np.asarray(states, dtype=np.float32)
+        qpos = states[:-1]
+        actions = states[1:]
 
+        left_arm_dim = np.full(
+            qpos.shape[0],
+            left_arm_all.shape[1],
+            dtype=np.int32,
+        )
+        right_arm_dim = np.full(
+            qpos.shape[0],
+            right_arm_all.shape[1],
+            dtype=np.int32,
+        )
+
+        if qpos.shape != actions.shape:
+            raise AssertionError(
+                f"episode {i}: qpos shape {qpos.shape} != action shape {actions.shape}"
+            )
+
+        if qpos.shape[0] != len(cam_high):
+            raise AssertionError(
+                f"episode {i}: qpos length {qpos.shape[0]} != cam_high length {len(cam_high)}"
+            )
+
+        if qpos.shape[0] != len(cam_right_wrist):
+            raise AssertionError(
+                f"episode {i}: qpos length {qpos.shape[0]} != "
+                f"cam_right_wrist length {len(cam_right_wrist)}"
+            )
+
+        if qpos.shape[0] != len(cam_left_wrist):
+            raise AssertionError(
+                f"episode {i}: qpos length {qpos.shape[0]} != "
+                f"cam_left_wrist length {len(cam_left_wrist)}"
+            )
+
+        if not np.allclose(qpos[1:], actions[:-1], atol=1e-6, rtol=0.0):
+            raise AssertionError(
+                f"episode {i}: expected qpos[1:] to equal action[:-1]"
+            )
         hdf5path = os.path.join(save_path, f"episode_{i}.hdf5")
 
         with h5py.File(hdf5path, "w") as f:
+            f.attrs["sim"] = True
             f.create_dataset("action", data=np.array(actions))
             obs = f.create_group("observations")
             obs.create_dataset("qpos", data=np.array(qpos))

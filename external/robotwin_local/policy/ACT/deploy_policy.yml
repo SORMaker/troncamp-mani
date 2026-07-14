@@ -9,9 +9,9 @@ instruction_type: unseen
 # ACT-specific arguments
 action_dim: 16
 kl_weight: 10.0
-chunk_size: 50 
+chunk_size: 64
 hidden_dim: 512
-dim_feedforward: 6144
+dim_feedforward: 8192
 temporal_agg: false 
 device: cuda:0
 

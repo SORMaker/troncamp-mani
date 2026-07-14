@@ -1,4 +1,5 @@
 import os
+import sys
 from sched import scheduler
 
 # Set rendering backend for MuJoCo
@@ -15,7 +16,6 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
 
@@ -38,6 +38,11 @@ e = IPython.embed
 
 
 def main(args):
+    if args["resume_ckpt"] is not None and args["init_model_ckpt"] is not None:
+        raise ValueError(
+            "--resume_ckpt and --init_model_ckpt cannot be used together"
+        )
+
     # Optional DDP via torchrun (sets LOCAL_RANK). Each rank owns one GPU and the train sampler
     # shards the data, so N ranks ~= Nx throughput -- a real speedup (DataParallel only replicated
     # the model every step and gave ~none for this small model). Single-process run: ddp=False.
@@ -129,6 +134,8 @@ def main(args):
         "ddp": ddp,
         "local_rank": local_rank,
         "is_main": is_main,
+        "resume_ckpt": args["resume_ckpt"],
+        "init_model_ckpt": args["init_model_ckpt"],
     }
 
     if is_eval:
@@ -153,14 +160,17 @@ def main(args):
         stats_path = os.path.join(ckpt_dir, f"dataset_stats.pkl")
         with open(stats_path, "wb") as f:
             pickle.dump(stats, f)
-    best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
+    best_epoch, min_val_loss = train_bc(
+        train_dataloader,
+        val_dataloader,
+        config,
+    )
 
-    # save best checkpoint (rank 0 only; non-main ranks get best_ckpt_info=None)
     if is_main:
-        best_epoch, min_val_loss, best_state_dict = best_ckpt_info
-        ckpt_path = os.path.join(ckpt_dir, f"policy_best.ckpt")
-        torch.save(best_state_dict, ckpt_path)
-        print(f"Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}")
+        print(
+            f"Best ckpt, val loss {min_val_loss:.6f} "
+            f"@ epoch {best_epoch}"
+        )
 
 
 def make_policy(policy_class, policy_config):
@@ -404,7 +414,62 @@ def train_bc(train_dataloader, val_dataloader, config):
         optimizer,
         T_max=num_epochs,
         eta_min=1e-6,
-)
+    )
+
+    start_epoch = 0
+    resume_ckpt = config.get("resume_ckpt")
+    init_model_ckpt = config.get("init_model_ckpt")
+    min_val_loss = np.inf
+    best_epoch = -1
+
+    if resume_ckpt is not None:
+        checkpoint = torch.load(resume_ckpt, map_location="cpu")
+
+        required_keys = {
+            "epoch",
+            "model",
+            "optimizer",
+            "scheduler",
+            "min_val_loss",
+            "best_epoch",
+        }
+        missing_keys = required_keys.difference(checkpoint.keys())
+        if missing_keys:
+            raise KeyError(
+                f"resume checkpoint is missing keys: {sorted(missing_keys)}"
+            )
+
+        policy.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+
+        start_epoch = int(checkpoint["epoch"])
+        min_val_loss = float(checkpoint["min_val_loss"])
+        best_epoch = int(checkpoint["best_epoch"])
+
+        for optimizer_state in optimizer.state.values():
+            for key, value in optimizer_state.items():
+                if torch.is_tensor(value):
+                    optimizer_state[key] = value.cuda()
+
+        print(f"Resumed full training state from epoch {start_epoch}.")
+
+    elif init_model_ckpt is not None:
+        model_state = torch.load(init_model_ckpt, map_location="cpu")
+        policy.load_state_dict(model_state)
+
+        start_epoch = 0
+        min_val_loss = np.inf
+        best_epoch = -1
+        print(
+            "Warm-started model weights only; optimizer and scheduler "
+            "start from epoch 0."
+        )
+
+    if start_epoch >= num_epochs:
+        raise ValueError(
+            f"resume epoch {start_epoch} is not smaller than num_epochs {num_epochs}"
+        )
 
     # Multi-GPU via DDP under torchrun: each rank owns one GPU, the train sampler shards the data
     # (set in load_data) and gradients are all-reduced -> real ~Nx throughput. Optimizer is built on
@@ -420,10 +485,8 @@ def train_bc(train_dataloader, val_dataloader, config):
 
     train_history = []
     validation_history = []
-    min_val_loss = np.inf
-    best_ckpt_info = None
 
-    for epoch in tqdm(range(num_epochs)):
+    for epoch in tqdm(range(start_epoch, num_epochs)):
         if ddp:
             train_dataloader.sampler.set_epoch(epoch)  # reshuffle the per-rank shards each epoch
         print(f"\nEpoch {epoch}")
@@ -438,13 +501,21 @@ def train_bc(train_dataloader, val_dataloader, config):
                     # leaves its grad reducer mid-reduction and crashes the next train step.
                     forward_dict = forward_pass(data, save_policy)
                     epoch_dicts.append(forward_dict)
-                epoch_summary = compute_dict_mean(epoch_dicts)
+                epoch_summary = {
+                    k: v.detach().cpu()
+                    for k, v in compute_dict_mean(epoch_dicts).items()
+                }
                 validation_history.append(epoch_summary)
 
-                epoch_val_loss = epoch_summary["loss"]
+                epoch_val_loss = float(epoch_summary["loss"].item())
                 if epoch_val_loss < min_val_loss:
                     min_val_loss = epoch_val_loss
-                    best_ckpt_info = (epoch, min_val_loss, deepcopy(save_policy.state_dict()))
+                    best_epoch = epoch
+                    if is_main:
+                        torch.save(
+                            save_policy.state_dict(),
+                            os.path.join(ckpt_dir, "policy_best.ckpt"),
+                        )
             print(f"Val loss:   {epoch_val_loss:.5f}")
         if ddp:
             dist.barrier()
@@ -452,6 +523,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         # training
         policy.train()
         optimizer.zero_grad()
+        epoch_train_dicts = []
         for batch_idx, data in enumerate(train_dataloader):
             forward_dict = forward_pass(data, policy)
             # backward (DP gathers per-GPU scalars into a vector -> reduce to scalar)
@@ -459,8 +531,9 @@ def train_bc(train_dataloader, val_dataloader, config):
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-            train_history.append(detach_dict(forward_dict))
-        epoch_summary = compute_dict_mean(train_history[(batch_idx + 1) * epoch:(batch_idx + 1) * (epoch + 1)])
+            epoch_train_dicts.append(detach_dict(forward_dict))
+        epoch_summary = compute_dict_mean(epoch_train_dicts)
+        train_history.append(epoch_summary)
         epoch_train_loss = epoch_summary["loss"]
         print(f"Train loss: {epoch_train_loss:.5f}")
         scheduler.step()
@@ -470,24 +543,48 @@ def train_bc(train_dataloader, val_dataloader, config):
             summary_string += f"{k}: {v.item():.3f} "
 
         if (epoch + 1) % config['save_freq'] == 0 and is_main:
-            ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{epoch + 1}_seed_{seed}.ckpt")
-            torch.save(save_policy.state_dict(), ckpt_path)
+            torch.save(
+                save_policy.state_dict(),
+                os.path.join(
+                    ckpt_dir,
+                    f"policy_epoch_{epoch + 1}_seed_{seed}.ckpt",
+                ),
+            )
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model": save_policy.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "min_val_loss": float(min_val_loss),
+                    "best_epoch": int(best_epoch),
+                },
+                os.path.join(ckpt_dir, "training_latest.pt"),
+            )
             plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
 
     if is_main:
-        ckpt_path = os.path.join(ckpt_dir, f"policy_last.ckpt")
-        torch.save(save_policy.state_dict(), ckpt_path)
-
-    if is_main:
-        best_epoch, min_val_loss, best_state_dict = best_ckpt_info
-        ckpt_path = os.path.join(ckpt_dir, f"policy_epoch_{best_epoch}_seed_{seed}.ckpt")
-        torch.save(best_state_dict, ckpt_path)
+        torch.save(
+            save_policy.state_dict(),
+            os.path.join(ckpt_dir, "policy_last.ckpt"),
+        )
+        torch.save(
+            {
+                "epoch": num_epochs,
+                "model": save_policy.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "min_val_loss": float(min_val_loss),
+                "best_epoch": int(best_epoch),
+            },
+            os.path.join(ckpt_dir, "training_latest.pt"),
+        )
         print(f"Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at epoch {best_epoch}")
 
         # save training curves
         plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed)
 
-    return best_ckpt_info
+    return best_epoch, min_val_loss
 
 
 def plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed):
@@ -547,5 +644,37 @@ if __name__ == "__main__":
         required=False,
     )
     parser.add_argument("--temporal_agg", action="store_true")
+    parser.add_argument(
+        "--resume_ckpt",
+        type=str,
+        default=None,
+        help="full training checkpoint containing model/optimizer/scheduler/epoch",
+    )
+    parser.add_argument(
+        "--init_model_ckpt",
+        type=str,
+        default=None,
+        help="legacy model-only state_dict used for warm start",
+    )
 
-    main(vars(parser.parse_args()))
+    parsed_args = vars(parser.parse_args())
+
+    trainer_only_flags = {"--resume_ckpt", "--init_model_ckpt"}
+    filtered_argv = [sys.argv[0]]
+    skip_next = False
+    for argument in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if argument in trainer_only_flags:
+            skip_next = True
+            continue
+        if any(
+            argument.startswith(f"{flag}=")
+            for flag in trainer_only_flags
+        ):
+            continue
+        filtered_argv.append(argument)
+    sys.argv = filtered_argv
+
+    main(parsed_args)
