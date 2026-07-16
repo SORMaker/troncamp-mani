@@ -39,7 +39,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         episode_id = self.episode_ids[index]
         dataset_path = os.path.join(self.dataset_dir, f"episode_{episode_id}.hdf5")
         with h5py.File(dataset_path, "r") as root:
-            is_sim = None
+            is_sim = bool(root.attrs.get("sim", False))
             original_action_shape = root["/action"].shape
             episode_len = original_action_shape[0]
             if sample_full_episode:
@@ -59,8 +59,19 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 action = root["/action"][start_ts:]
                 action_len = episode_len - start_ts
             else:
-                action = root["/action"][max(0, start_ts - 1):]  # hack, to make timesteps more aligned
-                action_len = episode_len - max(0, start_ts - 1)  # hack, to make timesteps more aligned
+                action_start = max(0, start_ts - 1)
+                action = root["/action"][action_start:]
+                action_len = episode_len - action_start
+
+            if qpos.shape != (16,):
+                raise ValueError(
+                    f"{dataset_path}: expected qpos shape (16,), got {qpos.shape}"
+                )
+
+            if action.ndim != 2 or action.shape[1] != 16:
+                raise ValueError(
+                    f"{dataset_path}: expected action shape (T, 16), got {action.shape}"
+                )
 
         self.is_sim = is_sim
         padded_action = np.zeros((self.max_action_len, action.shape[1]), dtype=np.float32)  # 根据max_action_len初始化
@@ -247,10 +258,7 @@ def compute_dict_mean(epoch_dicts):
 
 
 def detach_dict(d):
-    new_d = dict()
-    for k, v in d.items():
-        new_d[k] = v.detach()
-    return new_d
+    return {k: v.detach().cpu() for k, v in d.items()}
 
 
 def set_seed(seed):
