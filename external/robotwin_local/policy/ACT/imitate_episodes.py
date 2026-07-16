@@ -1,5 +1,4 @@
 import os
-from sched import scheduler
 
 # Set rendering backend for MuJoCo
 os.environ["MUJOCO_GL"] = "egl"
@@ -126,6 +125,7 @@ def main(args):
         "camera_names": camera_names,
         "real_robot": not is_sim,
         "save_freq": args['save_freq'],
+        "val_freq": args['val_freq'],
         "ddp": ddp,
         "local_rank": local_rank,
         "is_main": is_main,
@@ -392,11 +392,11 @@ def train_bc(train_dataloader, val_dataloader, config):
     ddp = config.get("ddp", False)
     local_rank = config.get("local_rank", -1)
     is_main = config.get("is_main", True)
+    val_freq = config.get("val_freq", 1)
 
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
-
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
 
@@ -404,7 +404,7 @@ def train_bc(train_dataloader, val_dataloader, config):
         optimizer,
         T_max=num_epochs,
         eta_min=1e-6,
-)
+    )
 
     # Multi-GPU via DDP under torchrun: each rank owns one GPU, the train sampler shards the data
     # (set in load_data) and gradients are all-reduced -> real ~Nx throughput. Optimizer is built on
@@ -429,7 +429,8 @@ def train_bc(train_dataloader, val_dataloader, config):
         print(f"\nEpoch {epoch}")
         # validation -- rank 0 only: it owns best-ckpt selection + saving, so the other ranks skip the
         # redundant val pass and wait at the barrier, keeping the next train all-reduce in lockstep.
-        if is_main:
+        should_validate = (epoch % val_freq == 0) or (epoch == num_epochs - 1)
+        if is_main and should_validate:
             with torch.inference_mode():
                 policy.eval()
                 epoch_dicts = []
@@ -539,6 +540,7 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_dim", action="store", type=int, help="hidden_dim", required=False)
     parser.add_argument("--state_dim", action="store", type=int, help="state dim", required=True)
     parser.add_argument("--save_freq", action="store", type=int, help="save ckpt frequency", required=False, default=6000)
+    parser.add_argument("--val_freq", action="store", type=int, help="validation frequency", required=False, default=1)
     parser.add_argument(
         "--dim_feedforward",
         action="store",
