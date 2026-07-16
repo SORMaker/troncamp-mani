@@ -37,3 +37,4 @@ __pycache__/
 # 系统
 .DS_Store
 __MACOSX/
+collect_adjust_bottle.log
