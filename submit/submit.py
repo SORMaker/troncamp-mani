@@ -31,7 +31,7 @@ DEFAULT_SERVER = "https://submit.troncamp-mani.limxdynamics.com"
 # eval_data/eval_result/results/runs/uploads 都是约定俗成的「产物/输出」目录名,嵌套出现
 # (如 policy/pi05/checkpoints)也是冗余 → 任意层排,堵 codex 复审指出的嵌套 bloat 洞;
 # ckpt 本已单独上传,打进代码包纯冗余。
-_EXCLUDE_ANYWHERE = {".git", "__pycache__", ".venv", ".venv-test", "node_modules",
+_EXCLUDE_ANYWHERE = {".git", "__pycache__", ".venv", ".venv-test", "node_modules", "logs",
                      "act_ckpt", "ckpt", "checkpoints", "datasets",
                      "processed_data", "eval_data", "eval_result", "results", "runs", "uploads"}
 # 仅在代码包根(顶层)排,避免误删选手嵌套的同名源码模块:

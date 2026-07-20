@@ -129,6 +129,8 @@ def main(args):
         "ddp": ddp,
         "local_rank": local_rank,
         "is_main": is_main,
+        "resume_ckpt": args["resume_ckpt"],
+        "start_epoch": args["start_epoch"],
     }
 
     if is_eval:
@@ -393,10 +395,19 @@ def train_bc(train_dataloader, val_dataloader, config):
     local_rank = config.get("local_rank", -1)
     is_main = config.get("is_main", True)
     val_freq = config.get("val_freq", 1)
+    resume_ckpt = config.get("resume_ckpt")
+    start_epoch = config.get("start_epoch", 0)
 
     set_seed(seed)
 
     policy = make_policy(policy_class, policy_config)
+    if resume_ckpt:
+        state_dict = torch.load(resume_ckpt, map_location="cpu")
+        loading_status = policy.load_state_dict(state_dict)
+        if is_main:
+            print(f"Resumed policy weights from {resume_ckpt}")
+            print(f"Resume loading status: {loading_status}")
+            print(f"Resume start epoch: {start_epoch}")
     policy.cuda()
     optimizer = make_optimizer(policy_class, policy)
 
@@ -405,6 +416,8 @@ def train_bc(train_dataloader, val_dataloader, config):
         T_max=num_epochs,
         eta_min=1e-6,
     )
+    if start_epoch > 0:
+        scheduler.step(start_epoch)
 
     # Multi-GPU via DDP under torchrun: each rank owns one GPU, the train sampler shards the data
     # (set in load_data) and gradients are all-reduced -> real ~Nx throughput. Optimizer is built on
@@ -423,7 +436,7 @@ def train_bc(train_dataloader, val_dataloader, config):
     min_val_loss = np.inf
     best_ckpt_info = None
 
-    for epoch in tqdm(range(num_epochs)):
+    for epoch in tqdm(range(start_epoch, num_epochs)):
         if ddp:
             train_dataloader.sampler.set_epoch(epoch)  # reshuffle the per-rank shards each epoch
         print(f"\nEpoch {epoch}")
@@ -445,8 +458,18 @@ def train_bc(train_dataloader, val_dataloader, config):
                 epoch_val_loss = epoch_summary["loss"]
                 if epoch_val_loss < min_val_loss:
                     min_val_loss = epoch_val_loss
-                    best_ckpt_info = (epoch, min_val_loss, deepcopy(save_policy.state_dict()))
-            print(f"Val loss:   {epoch_val_loss:.5f}")
+                    best_state_dict = deepcopy(save_policy.state_dict())
+                    best_ckpt_info = (epoch, min_val_loss, best_state_dict)
+                    best_ckpt_path = os.path.join(ckpt_dir, "policy_best.ckpt")
+                    best_ckpt_tmp_path = f"{best_ckpt_path}.tmp"
+                    torch.save(best_state_dict, best_ckpt_tmp_path)
+                    os.replace(best_ckpt_tmp_path, best_ckpt_path)
+                    print(f"New best ckpt saved: val loss {min_val_loss:.6f} @ epoch {epoch}")
+            best_epoch = best_ckpt_info[0]
+            print(
+                f"Val loss: {epoch_val_loss:.5f} @ epoch {epoch} | "
+                f"Best val loss: {min_val_loss:.5f} @ epoch {best_epoch}"
+            )
         if ddp:
             dist.barrier()
 
@@ -457,11 +480,20 @@ def train_bc(train_dataloader, val_dataloader, config):
             forward_dict = forward_pass(data, policy)
             # backward (DP gathers per-GPU scalars into a vector -> reduce to scalar)
             loss = forward_dict["loss"].mean()
+            if not torch.isfinite(loss):
+                rank = dist.get_rank() if ddp else 0
+                details = " ".join(
+                    f"{key}={value.detach().float().mean().item()}"
+                    for key, value in forward_dict.items()
+                )
+                raise FloatingPointError(
+                    f"Non-finite loss at epoch={epoch} batch={batch_idx} rank={rank}: {details}"
+                )
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
             train_history.append(detach_dict(forward_dict))
-        epoch_summary = compute_dict_mean(train_history[(batch_idx + 1) * epoch:(batch_idx + 1) * (epoch + 1)])
+        epoch_summary = compute_dict_mean(train_history[-(batch_idx + 1):])
         epoch_train_loss = epoch_summary["loss"]
         print(f"Train loss: {epoch_train_loss:.5f}")
         scheduler.step()
@@ -541,6 +573,8 @@ if __name__ == "__main__":
     parser.add_argument("--state_dim", action="store", type=int, help="state dim", required=True)
     parser.add_argument("--save_freq", action="store", type=int, help="save ckpt frequency", required=False, default=6000)
     parser.add_argument("--val_freq", action="store", type=int, help="validation frequency", required=False, default=1)
+    parser.add_argument("--resume_ckpt", action="store", type=str, default=None)
+    parser.add_argument("--start_epoch", action="store", type=int, default=0)
     parser.add_argument(
         "--dim_feedforward",
         action="store",

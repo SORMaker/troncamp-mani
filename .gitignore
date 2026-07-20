@@ -1,3 +1,13 @@
+# 本地实验与演示产物（不进入开源代码包）
+demo_output/
+external/robotwin_local/logs/
+external/robotwin_local/eval_result/
+external/robotwin_local/policy/ACT/act_ckpt/
+external/robotwin_local/policy/ACT/processed_data
+
+# 一次性 seed 搜索/录制辅助脚本；正式评测使用 starter/eval_local.py
+external/robotwin_local/script/eval_policy_search.py
+
 # 训练 / 评测产物(选手本地生成,不入库)
 ckpt/
 *.ckpt

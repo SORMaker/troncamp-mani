@@ -8,5 +8,25 @@
             "cam_right_wrist",
             "cam_left_wrist"
         ]
+    },
+    "sim-stack_bowls_three-stack_bowls_three_728ep-728": {
+        "dataset_dir": "./processed_data/sim-stack_bowls_three/stack_bowls_three_728ep-728",
+        "num_episodes": 728,
+        "episode_len": 1000,
+        "camera_names": [
+            "cam_high",
+            "cam_right_wrist",
+            "cam_left_wrist"
+        ]
+    },
+    "sim-stack_bowls_three-stack_bowls_three_1021ep-1021": {
+        "dataset_dir": "./processed_data/sim-stack_bowls_three/stack_bowls_three_1021ep-1021",
+        "num_episodes": 1021,
+        "episode_len": 1000,
+        "camera_names": [
+            "cam_high",
+            "cam_right_wrist",
+            "cam_left_wrist"
+        ]
     }
 }

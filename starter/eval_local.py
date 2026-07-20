@@ -24,6 +24,13 @@ RUNNER = KIT_ROOT / "recipes" / "eval" / "run_act_eval.py"  # 官方评测内核
 ROBOTWIN_ROOT = KIT_ROOT / "external" / "robotwin_local"
 PUBLIC_SEEDS = KIT_ROOT / "starter" / "public_seeds.json"   # 随包下发的公开 100 seed
 
+DEPLOY_CONFIG_BY_TRACK = {
+    "T1": "policy/ACT/deploy_policy_T1.yml",
+    "T2": "policy/ACT/deploy_policy_T2.yml",
+    "T3": "policy/ACT/deploy_policy_T3.yml",
+    "T4": "policy/ACT/deploy_policy_T4.yml",
+}
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(
@@ -41,8 +48,9 @@ def main() -> int:
                          "(EVAL_REPEATS=1,单次 rollout);调大只用于本地自查稳定性,不再贴合官方单次口径")
     ap.add_argument("--temporal-agg", action="store_true",
                     help="推理时闭环(temporal aggregation;T4 可用)")
-    ap.add_argument("--deploy-config", default="policy/ACT/deploy_policy.yml",
-                    help="ACT 推理配置(相对 robotwin-root)")
+    ap.add_argument("--deploy-config", default=None,
+                    help="ACT 推理配置(相对 robotwin-root)。默认按 track 自动选择 "
+                         "deploy_policy_T1.yml ... deploy_policy_T4.yml")
     ap.add_argument("--out", default="result.json", help="result 契约落盘路径")
     a = ap.parse_args()
 
@@ -53,13 +61,14 @@ def main() -> int:
     if not Path(a.seeds).exists():
         raise SystemExit(f"[eval_local] seed 表不存在: {a.seeds}")
 
+    deploy_config = a.deploy_config or DEPLOY_CONFIG_BY_TRACK[a.track]
     cmd = [
         sys.executable, str(RUNNER),
         "--robotwin-root", str(ROBOTWIN_ROOT),
         "--track", a.track,
         "--seeds", str(Path(a.seeds).resolve()),
         "--ckpt-dir", str(Path(a.ckpt_dir).resolve()),
-        "--deploy-config", a.deploy_config,
+        "--deploy-config", deploy_config,
         "--repeats", str(a.repeats),
         "--out", a.out,
     ]

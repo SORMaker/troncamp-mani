@@ -8,7 +8,10 @@ envs/curobo
 *.zip
 viewer_show.*
 eval_video/
-task_config/
+task_config/*
+# Final reproducibility presets added by this project.
+!task_config/grab_roller_200ep.yml
+!task_config/stack_bowls_three_1021ep.yml
 **/.DS_Store
 
 # eval result

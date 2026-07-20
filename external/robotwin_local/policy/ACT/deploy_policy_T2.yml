@@ -1,4 +1,4 @@
-# Compatibility default for the official evaluator. Keep semantically identical to deploy_policy_T4.yml.
+# T2 grab_roller deployment profile. Must match train_T2.sh/checkpoint structure.
 task_name: null
 policy_name: ACT
 task_config: null
@@ -8,9 +8,9 @@ instruction_type: unseen
 
 action_dim: 16
 kl_weight: 10.0
-chunk_size: 100
-hidden_dim: 1024
-dim_feedforward: 4096
+chunk_size: 50
+hidden_dim: 512
+dim_feedforward: 3200
 temporal_agg: false
 device: cuda:0
 
